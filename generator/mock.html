@@ -1,0 +1,138 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>mock</title>
+<style>html,body{margin:0;background:#ddd}#s{position:fixed;left:8px;top:8px;font:12px sans-serif}</style>
+</head><body><div id="s">loading…</div>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
+<script>
+// Spec-sheet mockup rendered from the real one-piece STLs.
+const SW = 2400, SH = 1600;                       // sheet size
+const FONT = '"Yu Gothic UI","Yu Gothic","Meiryo","Hiragino Sans",sans-serif';
+const colors = ['#f28a1e', '#f4f2ec', '#262626', '#1f3a8f'];
+const names = ['orange', 'white', 'black', 'navy'];
+const lin = c => new THREE.Color(c).convertSRGBToLinear();
+
+const renderer = new THREE.WebGLRenderer({antialias: true, preserveDrawingBuffer: true, alpha: true}); renderer.setClearColor(0x000000, 0);
+renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.outputEncoding = THREE.sRGBEncoding; renderer.setPixelRatio(1);
+
+const loader = new THREE.STLLoader();
+const load = f => new Promise((ok, ng) => loader.load(f, ok, undefined, ng));
+let geos = [];
+
+function makeScene(bg, groundColor) {
+  const scene = new THREE.Scene(); scene.background = bg ? lin(bg) : null;
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8a8a, 0.55));
+  const sun = new THREE.DirectionalLight(0xffffff, 0.95); sun.position.set(-40, -30, 90); sun.castShadow = true;
+  sun.shadow.mapSize.set(2048, 2048); Object.assign(sun.shadow.camera, {left: -80, right: 80, top: 80, bottom: -80});
+  sun.shadow.radius = 4; scene.add(sun);
+  const fill = new THREE.DirectionalLight(0xffffff, 0.3); fill.position.set(60, 50, 40); scene.add(fill);
+  const g = new THREE.Mesh(new THREE.PlaneGeometry(600, 600),
+    groundColor ? new THREE.MeshStandardMaterial({color: lin(groundColor), roughness: 0.85}) : new THREE.ShadowMaterial({opacity: 0.2}));
+  g.receiveShadow = true; g.position.z = -1.6; scene.add(g);
+  return scene;
+}
+function chip(showBack) {
+  const outer = new THREE.Group(), g = new THREE.Group();
+  geos.forEach((geo, c) => {
+    if (!geo) return;
+    const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({color: lin(colors[c]), roughness: 0.58, metalness: 0}));
+    m.castShadow = true; m.receiveShadow = true; m.position.z = -1.6; g.add(m);
+  });
+  if (showBack) g.rotation.y = Math.PI;
+  outer.add(g); return outer;
+}
+function shot(scene, cam, w, h) {
+  renderer.setSize(w, h); cam.aspect = w / h; cam.updateProjectionMatrix();
+  renderer.render(scene, cam);
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  c.getContext('2d').drawImage(renderer.domElement, 0, 0); return c;
+}
+function cam(fov, pos, at) { const c = new THREE.PerspectiveCamera(fov, 1, 1, 2000); c.position.set(...pos); c.up.set(0, 0, 1); c.lookAt(...at); return c; }
+
+// ---- 2D helpers
+function rr(x, ctx, X, Y, W, H, R, fill) { ctx.beginPath(); ctx.moveTo(X + R, Y); ctx.arcTo(X + W, Y, X + W, Y + H, R); ctx.arcTo(X + W, Y + H, X, Y + H, R); ctx.arcTo(X, Y + H, X, Y, R); ctx.arcTo(X, Y, X + W, Y, R); ctx.closePath(); if (fill) { ctx.fillStyle = fill; ctx.fill(); } }
+function pill(ctx, text, cx, y, size) {
+  ctx.font = `bold ${size}px ${FONT}`; const w = ctx.measureText(text).width + size * 1.6, h = size * 1.75;
+  rr(0, ctx, cx - w / 2, y, w, h, h / 2, '#3d4148'); ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(text, cx, y + h / 2 + 1);
+}
+function panel(ctx, img, X, Y, W, H, R) { ctx.save(); rr(0, ctx, X, Y, W, H, R); ctx.clip(); ctx.drawImage(img, X, Y, W, H); ctx.restore(); }
+function caption(ctx, t1, t2, X, Y) {
+  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  ctx.fillStyle = '#2b2d31'; ctx.font = `bold 26px ${FONT}`; ctx.fillText(t1, X, Y);
+  ctx.fillStyle = '#5b5f66'; ctx.font = `21px ${FONT}`; ctx.fillText(t2, X, Y + 38);
+}
+
+(async () => {
+  for (let c = 0; c < 4; c++) { try { geos[c] = await load(`../onepiece/chip_${c}_${names[c]}.stl`); } catch (e) { geos[c] = null; } }
+  const BG = '#eceded';
+
+  // hero shots (front / back), slightly tilted like a product photo
+  const s1 = makeScene(null); const f = chip(false); f.rotation.z = 0.04; s1.add(f);
+  const front = shot(s1, cam(24, [0, -62, 92], [0, 1.5, 0]), 900, 760);
+  const s2 = makeScene(null); const b = chip(true); b.rotation.z = -0.03; s2.add(b);
+  const back = shot(s2, cam(24, [0, -62, 92], [0, 1.5, 0]), 900, 760);
+  // side view
+  const s3 = makeScene(null); const sd = chip(false); sd.rotation.y = Math.PI / 2; sd.position.z = 18.4; s3.add(sd);
+  const side = shot(s3, cam(11, [0, -260, 18.4], [0, 0, 18.4]), 300, 380);
+  // close-ups
+  const s4 = makeScene(BG); s4.add(chip(false));
+  const closeF = shot(s4, cam(22, [-3, -44, 50], [-1, 0.5, 0]), 640, 420);
+  const s5 = makeScene(BG); s5.add(chip(true));
+  const closeQ = shot(s5, cam(22, [0, -30, 42], [0, 1, 0]), 640, 420);
+  const s6 = makeScene(BG); s6.add(chip(false));
+  const closeE = shot(s6, cam(16, [52, -46, 14], [14, -8, 0]), 640, 420);
+  // usage: several chips on a wooden table
+  const s7 = makeScene('#b98552', '#a8733f');
+  const pos = [[-27, 6, 0.3, false], [19, 10, -0.5, true], [-4, -26, 0.15, false], [42, -22, 1.0, true]];
+  pos.forEach(([x, y, r, bk]) => { const c = chip(bk); c.position.set(x, y, 0); c.rotation.z = r; s7.add(c); });
+  const usage = shot(s7, cam(26, [8, -112, 78], [7, -6, 0]), 640, 420);
+
+  // ---- compose the sheet
+  const S = document.createElement('canvas'); S.width = SW; S.height = SH; const x = S.getContext('2d');
+  x.fillStyle = '#e9eaeb'; x.fillRect(0, 0, SW, SH);
+  // title block
+  x.textAlign = 'left'; x.textBaseline = 'alphabetic';
+  x.fillStyle = '#26282c'; x.font = `bold 66px ${FONT}`; x.fillText('yankee MakerChip', 70, 110);
+  x.fillStyle = '#3b3e44'; x.font = `30px ${FONT}`; x.fillText('3Dプリンターでつくる、オリジナルメイカーチップ', 72, 160);
+  x.fillStyle = '#5b5f66'; x.font = `24px ${FONT}`; x.fillText('φ40mm × 3.2mm（4色）　オレンジ・白・黒・ネイビー', 72, 200);
+  x.save(); x.translate(SW - 150, 110); x.rotate(-0.08); x.fillStyle = '#3b3e44'; x.font = `bold 34px ${FONT}`; x.textAlign = 'right';
+  x.fillText('使うたびに、', 0, 0); x.fillText('ちょっと嬉しくなる', 40, 50); x.restore();
+
+  // hero row
+  pill(x, '表面（アイコン）', 520, 240, 30); pill(x, '裏面（XのQR）', 1330, 240, 30);
+  x.drawImage(front, 70, 300, 900, 760); x.drawImage(back, 880, 300, 900, 760);
+  // right column: side + spec
+  rr(0, x, 1830, 300, 500, 480, 18, '#e2e3e5'); pill(x, '側面イメージ', 1975, 320, 26);
+  x.drawImage(side, 1930, 380, 240, 304);
+  x.strokeStyle = '#5b5f66'; x.lineWidth = 2; x.beginPath(); x.moveTo(2120, 420); x.lineTo(2120, 690); x.moveTo(2110, 420); x.lineTo(2130, 420); x.moveTo(2110, 690); x.lineTo(2130, 690); x.stroke();
+  x.fillStyle = '#3b3e44'; x.font = `24px ${FONT}`; x.textAlign = 'left'; x.fillText('約40mm', 2140, 560); x.fillText('厚み 約3.2mm', 1960, 740);
+
+  rr(0, x, 1830, 800, 500, 260, 18, '#e2e3e5');
+  x.fillStyle = '#2b2d31'; x.font = `bold 26px ${FONT}`; x.fillText('仕様', 1860, 846);
+  x.font = `21px ${FONT}`; x.fillStyle = '#3b3e44';
+  ['直径 40mm ／ 厚さ 3.2mm（一体成形）', '表：キャラ＋ロゴを0.4mm浮き彫り', '裏：底面にQRとXを色でフラットに埋め込み', 'PLA 4色（AMS 1回印刷・貼り合わせ不要）', '目安：約27分（P1S・0.20mm）']
+    .forEach((t, i) => x.fillText('・' + t, 1860, 890 + i * 34));
+
+  // bottom row
+  const by = 1090, bw = 540, bh = 354, gap = 38;
+  const cards = [[closeF, '立体感のあるアイコン', 'キャラクターとロゴを立体的に表現'], [closeE, 'チップのフチデザイン', 'ポーカーチップのような縞をアクセントに'],
+                 [closeQ, 'QRコード', 'Xのプロフィールに飛ぶQR（読み取り確認済み）'], [usage, '使用イメージ', 'イベント・ノベルティ・グッズなどに']];
+  cards.forEach(([img, t1, t2], i) => { const X = 70 + i * (bw + gap); panel(x, img, X, by, bw, bh, 16); caption(x, t1, t2, X + 4, by + bh + 16); });
+
+  // colour legend + size box
+  const ly = 1555; x.textBaseline = 'middle'; x.font = `22px ${FONT}`; x.textAlign = 'left';
+  [['#f28a1e', 'オレンジ（ベース）'], ['#f4f2ec', '白'], ['#262626', '黒'], ['#1f3a8f', 'ネイビー（ロゴ）']].forEach(([c, t], i) => {
+    const X = 80 + i * 250; x.beginPath(); x.arc(X, ly, 13, 0, Math.PI * 2); x.fillStyle = c; x.fill(); x.strokeStyle = '#b9bbbe'; x.lineWidth = 1.5; x.stroke();
+    x.fillStyle = '#3b3e44'; x.fillText(t, X + 24, ly);
+  });
+  rr(0, x, 1420, ly - 26, 910, 52, 12, '#dcdde0'); rr(0, x, 1420, ly - 26, 160, 52, 12, '#c9cbcf');
+  x.fillStyle = '#2b2d31'; x.font = `bold 22px ${FONT}`; x.textAlign = 'center'; x.fillText('サイズ目安', 1500, ly);
+  x.font = `21px ${FONT}`; x.textAlign = 'left'; x.fillText('直径：40mm　厚み：3.2mm（4色・PLA素材推奨）', 1605, ly);
+
+  document.body.innerHTML = ''; S.style.width = '100%'; document.body.appendChild(S);
+  const blob = await new Promise(r => S.toBlob(r, 'image/png'));
+  const res = await fetch('/save?name=yankee_MakerChip_mock.png', {method: 'POST', body: blob});
+  document.title = 'saved ' + res.status;
+})().catch(e => { document.getElementById('s').textContent = 'ERR ' + e; document.title = 'error ' + e; });
+</script></body></html>
