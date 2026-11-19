@@ -10,6 +10,7 @@ param(
     [double]$AdaptT = 16,    # pencil lines: darker than the local average by this much -> black (0 = off)
     [int]$SpeckMin = 6,      # black specks smaller than this (cells of 0.125mm) are removed
     [int]$LineGrow = 1,      # thicken black lines by this many cells (0.125mm each)
+    [double]$StrokeW = 0.3,  # hand-traced forehead lines width before thickening (mm)
     [string]$Mockup = "$PSScriptRoot\mockup2.webp",
     [double]$SplitY = -3.6,  # above: head from icon / below: body from mockup (mm)
     [double]$TextScale = 1.02,
@@ -31,6 +32,12 @@ $w = 0; $h = 0
 $g = [CoinGen]::LoadGray($Icon, [ref]$w, [ref]$h)
 $map = $null
 [Chip]::AdaptT = $AdaptT
+# forehead: the white face patches are drawn by shading, so trace their outline by hand
+# (icon image px). Automatic line detection is switched off there to avoid stray squiggles.
+[Chip]::NoAutoZones.Add([double[]](200, 140, 450, 238))
+[Chip]::Strokes.Add([double[]](194.1,265.9, 200.9,231.9, 214.4,204.8, 231.4,189.5, 248.4,189.5, 265.3,199.7, 277.2,215.0, 284.0,228.5, 289.1,242.1))   # left arch
+[Chip]::Strokes.Add([double[]](295.9,240.4, 299.3,218.4, 312.8,194.6, 333.2,176.0, 353.5,169.0, 367.1,174.3, 384.0,187.8, 397.6,204.8, 409.5,228.5, 418.0,257.4))   # centre -> right arch
+[Chip]::StrokeWidthMm = $StrokeW
 # sunglasses lenses: fill dark, keep only the bright glints white  (image cx, cy, rx, ry, threshold)
 [Chip]::DarkZones.Add([double[]](237, 287, 38, 35, 215))
 [Chip]::DarkZones.Add([double[]](360, 280, 48, 38, 215))

@@ -198,6 +198,12 @@ public static class Chip
 
     public static bool[] LastSil, LastBg; public static List<double[]> DarkZones = new List<double[]>(); public static int CloseR = 3; public static double BgMin = 250;
     public static double AdaptT = 0, AdaptMax = 215; public static int AdaptR = 9;   // local-contrast line detection
+    // hand-traced strokes: polylines in image px { x0,y0, x1,y1, ... }, drawn black StrokeWidthMm wide
+    public static List<double[]> Strokes = new List<double[]>(); public static double StrokeWidthMm = 0.45;
+    // rectangles in image px { x0, y0, x1, y1 } where automatic line detection is off (only very dark ink counts)
+    public static List<double[]> NoAutoZones = new List<double[]>(); public static double QuietBlackThr = 90;
+    // tonal-edge zones in image px: { x0, y0, x1, y1, whiteThreshold }
+    public static List<double[]> EdgeZones = new List<double[]>(); public static int EdgeW = 2, EdgeMinBlob = 3000, EdgeHoleMax = 600, EdgeOpen = 5, EdgeLook = 4; public static double EdgeDark = 205; public static double EdgeReach = 0.8; public static bool[] LastEdge;
     // ---------- front from the pencil icon (white round background) ----------
     // Returns per-cell class: -1 none, 1 white, 2 black. Also returns the image->mm mapping
     // map = { imgCx, imgCy, mmPerPx } so other features (laptop text) can be placed.
@@ -273,6 +279,121 @@ public static class Chip
             double s = integ[yb * (w + 1) + xb] - integ[ya * (w + 1) + xb] - integ[yb * (w + 1) + xa] + integ[ya * (w + 1) + xa];
             return s / ((xb - xa) * (yb - ya));
         };
+        // tonal edges: outline of bright (white) regions inside EdgeZones, e.g. the white face
+        // patch against the grey-shaded forehead, which is drawn by shading rather than a line
+        var edge = new bool[w * h];
+        if (EdgeZones.Count > 0)
+        {
+            // 5x5 box blur of gb
+            var gs = new double[w * h];
+            for (int y = 0; y < h; y++) for (int x = 0; x < w; x++)
+                {
+                    int xa = Math.Max(0, x - 2), xb = Math.Min(w, x + 3), ya = Math.Max(0, y - 2), yb = Math.Min(h, y + 3);
+                    double s = integ[yb * (w + 1) + xb] - integ[ya * (w + 1) + xb] - integ[yb * (w + 1) + xa] + integ[ya * (w + 1) + xa];
+                    gs[y * w + x] = s / ((xb - xa) * (yb - ya));
+                }
+            foreach (var z in EdgeZones)
+            {
+                int zx0 = (int)z[0], zy0 = (int)z[1], zx1 = (int)z[2], zy1 = (int)z[3]; double wt = z[4];
+                // white mask in the zone, small blobs removed
+                int zw = zx1 - zx0, zh = zy1 - zy0;
+                var wm = new bool[zw * zh];
+                for (int y = 0; y < zh; y++) for (int x = 0; x < zw; x++) { int k = (y + zy0) * w + x + zx0; wm[y * zw + x] = sil[k] && gs[k] > wt; }
+                // opening (erode then dilate) cuts thin bright streaks off the white face areas
+                for (int pass = 0; pass < 2; pass++)
+                    for (int it = 0; it < EdgeOpen; it++)
+                    {
+                        var o2 = new bool[zw * zh];
+                        for (int y = 0; y < zh; y++) for (int x = 0; x < zw; x++)
+                            {
+                                int p = y * zw + x;
+                                bool l = x > 0 ? wm[p - 1] : wm[p], r = x < zw - 1 ? wm[p + 1] : wm[p], u = y > 0 ? wm[p - zw] : wm[p], d = y < zh - 1 ? wm[p + zw] : wm[p];
+                                o2[p] = pass == 0 ? (wm[p] && l && r && u && d) : (wm[p] || l || r || u || d);
+                            }
+                        wm = o2;
+                    }
+                var seen = new bool[zw * zh]; var stk = new Stack<int>(); var comp = new List<int>();
+                for (int s0 = 0; s0 < wm.Length; s0++)
+                {
+                    if (!wm[s0] || seen[s0]) continue;
+                    comp.Clear(); stk.Push(s0); seen[s0] = true;
+                    while (stk.Count > 0)
+                    {
+                        int p = stk.Pop(); comp.Add(p); int px = p % zw, py = p / zw;
+                        int[] nb = { px > 0 ? p - 1 : -1, px < zw - 1 ? p + 1 : -1, py > 0 ? p - zw : -1, py < zh - 1 ? p + zw : -1 };
+                        foreach (int q in nb) if (q >= 0 && wm[q] && !seen[q]) { seen[q] = true; stk.Push(q); }
+                    }
+                    // keep only big white areas that reach the lower part of the zone (the face, not head sheen)
+                    int maxY = 0; foreach (int p in comp) maxY = Math.Max(maxY, p / zw);
+                    if (comp.Count < EdgeMinBlob || maxY < zh * EdgeReach) foreach (int p in comp) wm[p] = false;
+                }
+                // fill small grey holes inside the white areas (fur tufts) so they don't get outlined
+                var seen2 = new bool[zw * zh];
+                for (int s0 = 0; s0 < wm.Length; s0++)
+                {
+                    if (wm[s0] || seen2[s0]) continue;
+                    comp.Clear(); stk.Push(s0); seen2[s0] = true; bool border = false;
+                    while (stk.Count > 0)
+                    {
+                        int p = stk.Pop(); comp.Add(p); int px = p % zw, py = p / zw;
+                        if (px == 0 || py == 0 || px == zw - 1 || py == zh - 1) border = true;
+                        int[] nb = { px > 0 ? p - 1 : -1, px < zw - 1 ? p + 1 : -1, py > 0 ? p - zw : -1, py < zh - 1 ? p + zw : -1 };
+                        foreach (int q in nb) if (q >= 0 && !wm[q] && !seen2[q]) { seen2[q] = true; stk.Push(q); }
+                    }
+                    if (!border && comp.Count < EdgeHoleMax) foreach (int p in comp) wm[p] = true;
+                }
+                // boundary of the white mask where the other side is grey (not background, not already a dark line)
+                for (int y = 1; y < zh - 1; y++) for (int x = 1; x < zw - 1; x++)
+                    {
+                        int p = y * zw + x; if (!wm[p]) continue;
+                        bool b = !wm[p - 1] || !wm[p + 1] || !wm[p - zw] || !wm[p + zw];
+                        if (!b) continue;
+                        // only strong edges: there must be clearly darker grey nearby (weak light-grey fades are skipped)
+                        double mn = 255;
+                        for (int dy = -EdgeLook; dy <= EdgeLook; dy++) for (int dx = -EdgeLook; dx <= EdgeLook; dx++)
+                            {
+                                int xx = x + zx0 + dx, yy = y + zy0 + dy;
+                                if (xx >= 0 && yy >= 0 && xx < w && yy < h) mn = Math.Min(mn, gs[yy * w + xx]);
+                            }
+                        if (mn > EdgeDark) continue;
+                        for (int dy = -EdgeW; dy <= EdgeW; dy++) for (int dx = -EdgeW; dx <= EdgeW; dx++)
+                            {
+                                int xx = x + zx0 + dx, yy = y + zy0 + dy;
+                                if (dx * dx + dy * dy <= EdgeW * EdgeW && xx >= 0 && yy >= 0 && xx < w && yy < h && sil[yy * w + xx]) edge[yy * w + xx] = true;
+                            }
+                    }
+            }
+        }
+        LastEdge = edge;
+        // hand-traced strokes (image px polylines, Catmull-Rom smoothed)
+        var segs = new List<double[]>();
+        foreach (var s in Strokes)
+        {
+            int n = s.Length / 2;
+            Func<int, int, double> P = (i, c) => s[Math.Max(0, Math.Min(n - 1, i)) * 2 + c];
+            double px = P(0, 0), py = P(0, 1);
+            for (int i = 0; i < n - 1; i++)
+                for (int t = 1; t <= 12; t++)
+                {
+                    double u = t / 12.0, u2 = u * u, u3 = u2 * u;
+                    double[] q = new double[2];
+                    for (int c = 0; c < 2; c++)
+                        q[c] = 0.5 * (2 * P(i, c) + (-P(i - 1, c) + P(i + 1, c)) * u + (2 * P(i - 1, c) - 5 * P(i, c) + 4 * P(i + 1, c) - P(i + 2, c)) * u2 + (-P(i - 1, c) + 3 * P(i, c) - 3 * P(i + 1, c) + P(i + 2, c)) * u3);
+                    segs.Add(new double[] { px, py, q[0], q[1] }); px = q[0]; py = q[1];
+                }
+        }
+        double strokeHalfPx = StrokeWidthMm / 2 / mmpp;
+        Func<double, double, bool> onStroke = (qx, qy) =>
+        {
+            foreach (var sg in segs)
+            {
+                double dx = sg[2] - sg[0], dy = sg[3] - sg[1], l2 = dx * dx + dy * dy;
+                double tt = l2 > 0 ? Math.Max(0, Math.Min(1, ((qx - sg[0]) * dx + (qy - sg[1]) * dy) / l2)) : 0;
+                double ex = sg[0] + tt * dx - qx, ey = sg[1] + tt * dy - qy;
+                if (ex * ex + ey * ey <= strokeHalfPx * strokeHalfPx) return true;
+            }
+            return false;
+        };
         var top = new int[N * N];
         for (int j = 0; j < N; j++) for (int i = 0; i < N; i++)
             {
@@ -283,8 +404,11 @@ public static class Chip
                 double v = CoinGen.Sample(g, w, h, ix, iy);
                 double thr = blackThr;
                 foreach (var z in DarkZones) { double ux = (ix - z[0]) / z[2], uy = (iy - z[1]) / z[3]; if (ux * ux + uy * uy < 1) thr = z[4]; }
-                bool adaptive = AdaptT > 0 && v < AdaptMax && mean(xi, yi) - v > AdaptT;
-                top[k] = v < thr || adaptive ? 2 : 1;
+                bool quiet = false;   // zones where automatic line detection is switched off
+                foreach (var z in NoAutoZones) if (ix >= z[0] && iy >= z[1] && ix <= z[2] && iy <= z[3]) quiet = true;
+                bool adaptive = !quiet && AdaptT > 0 && v < AdaptMax && mean(xi, yi) - v > AdaptT;
+                bool dark = quiet ? v < QuietBlackThr : v < thr;
+                top[k] = dark || adaptive || edge[yi * w + xi] || onStroke(ix, iy) ? 2 : 1;
             }
         return top;
     }
