@@ -197,6 +197,7 @@ public static class Chip
     }
 
     public static bool[] LastSil, LastBg; public static List<double[]> DarkZones = new List<double[]>(); public static int CloseR = 3; public static double BgMin = 250;
+    public static double AdaptT = 0, AdaptMax = 215; public static int AdaptR = 9;   // local-contrast line detection
     // ---------- front from the pencil icon (white round background) ----------
     // Returns per-cell class: -1 none, 1 white, 2 black. Also returns the image->mm mapping
     // map = { imgCx, imgCy, mmPerPx } so other features (laptop text) can be placed.
@@ -263,6 +264,15 @@ public static class Chip
                     maxd = Math.Max(maxd, Math.Sqrt((x - icx) * (x - icx) + (y - icy) * (y - icy)));
         double mmpp = fitR / maxd;
         map = new double[] { icx, icy, mmpp };
+        // local mean (box filter) for adaptive line detection
+        var integ = new double[(w + 1) * (h + 1)];
+        for (int y = 0; y < h; y++) { double row = 0; for (int x = 0; x < w; x++) { row += gb[y * w + x]; integ[(y + 1) * (w + 1) + x + 1] = integ[y * (w + 1) + x + 1] + row; } }
+        Func<int, int, double> mean = (xc, yc) =>
+        {
+            int xa = Math.Max(0, xc - AdaptR), xb = Math.Min(w, xc + AdaptR + 1), ya = Math.Max(0, yc - AdaptR), yb = Math.Min(h, yc + AdaptR + 1);
+            double s = integ[yb * (w + 1) + xb] - integ[ya * (w + 1) + xb] - integ[yb * (w + 1) + xa] + integ[ya * (w + 1) + xa];
+            return s / ((xb - xa) * (yb - ya));
+        };
         var top = new int[N * N];
         for (int j = 0; j < N; j++) for (int i = 0; i < N; i++)
             {
@@ -273,7 +283,8 @@ public static class Chip
                 double v = CoinGen.Sample(g, w, h, ix, iy);
                 double thr = blackThr;
                 foreach (var z in DarkZones) { double ux = (ix - z[0]) / z[2], uy = (iy - z[1]) / z[3]; if (ux * ux + uy * uy < 1) thr = z[4]; }
-                top[k] = v < thr ? 2 : 1;
+                bool adaptive = AdaptT > 0 && v < AdaptMax && mean(xi, yi) - v > AdaptT;
+                top[k] = v < thr || adaptive ? 2 : 1;
             }
         return top;
     }

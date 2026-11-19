@@ -7,6 +7,9 @@ param(
     [int]$LineThr = 140,     # pencil line detection (silhouette)
     [int]$BlackThr = 135,    # darker than this -> black filament
     [double]$FitR = 16.4,    # character fits inside this radius (mm)
+    [double]$AdaptT = 16,    # pencil lines: darker than the local average by this much -> black (0 = off)
+    [int]$SpeckMin = 6,      # black specks smaller than this (cells of 0.125mm) are removed
+    [int]$LineGrow = 1,      # thicken black lines by this many cells (0.125mm each)
     [string]$Mockup = "$PSScriptRoot\mockup2.webp",
     [double]$SplitY = -3.6,  # above: head from icon / below: body from mockup (mm)
     [double]$TextScale = 1.02,
@@ -27,6 +30,7 @@ $disc = [CoinGen]::Disc()
 $w = 0; $h = 0
 $g = [CoinGen]::LoadGray($Icon, [ref]$w, [ref]$h)
 $map = $null
+[Chip]::AdaptT = $AdaptT
 # sunglasses lenses: fill dark, keep only the bright glints white  (image cx, cy, rx, ry, threshold)
 [Chip]::DarkZones.Add([double[]](237, 287, 38, 35, 215))
 [Chip]::DarkZones.Add([double[]](360, 280, 48, 38, 215))
@@ -66,8 +70,9 @@ for ($j = 0; $j -lt $N; $j++) { for ($i = 0; $i -lt $N; $i++) {
 $sil = [CoinGen]::Majority($sil, 1)
 $sil = [Chip]::KeepLargest($sil)
 $sil = [CoinGen]::RemoveSmall($sil, $false, 250, $disc)
-$black = [CoinGen]::Majority($black, 1)
-$black = [CoinGen]::RemoveSmall($black, $true, 8, $disc)
+# keep thin pencil lines: drop specks, then thicken lines so they print (~0.4mm)
+$black = [CoinGen]::RemoveSmall($black, $true, $SpeckMin, $disc)
+for ($d = 0; $d -lt $LineGrow; $d++) { $black = [Chip]::Dilate($black, $sil) }
 $black = [CoinGen]::RemoveSmall($black, $false, 5, $disc)   # fill pin-holes in black areas
 $inner = [Chip]::Erode($sil, 4)                               # 0.5mm black outline band
 
